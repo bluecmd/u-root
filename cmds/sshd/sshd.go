@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"syscall"
 
 	"github.com/u-root/u-root/pkg/pty"
 	"golang.org/x/crypto/ssh"
@@ -47,25 +48,41 @@ var (
 // start a command
 // TODO: use /etc/passwd, but the Go support for that is incomplete
 func runCommand(c ssh.Channel, p *pty.Pty, cmd string, args... string) error {
+	var ps *os.ProcessState
 	defer c.Close()
+
+	// TODO(bluecmd): Need to fix something to work like ssh does (emulating "system()")
+	// Right now executing shell builtins are really awkward
 
 	if p != nil {
 		log.Printf("Executing PTY command %s %v", cmd, args)
 		p.Command(cmd, args...)
 		if err := p.C.Start(); err != nil {
+			dprintf("Failed to execute: %v", err)
 			return err
 		}
 		defer p.C.Wait()
 		go io.Copy(p.Ptm, c)
 		go io.Copy(c, p.Ptm)
+		ps, _ = p.C.Process.Wait()
 	} else {
 		e := exec.Command(cmd, args...)
 		e.Stdin, e.Stdout, e.Stderr = c, c, c
 		log.Printf("Executing non-PTY command %s %v", cmd, args)
 		if err := e.Start(); err != nil {
+			dprintf("Failed to execute: %v", err)
 			return err
 		}
-		defer e.Process.Wait()
+		ps, _ = e.Process.Wait()
+	}
+
+	dprintf("Process state for %s: %v", cmd, ps)
+	var ws syscall.WaitStatus
+	ws = ps.Sys().(syscall.WaitStatus)
+	if ws.Signaled() {
+	}
+	if ws.Exited() {
+		dprintf("Exit status %v", ws.ExitStatus())
 	}
 	return nil
 }
